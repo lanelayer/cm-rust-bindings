@@ -58,6 +58,12 @@ fn main() {
                 .map(PathBuf::from)
                 .unwrap_or_else(|_| machine_dir_path.join("src"));
             println!("cargo:rustc-link-search={}", libpath.to_str().unwrap());
+            
+            // Monitor external library files
+            let libcartesi_path = libpath.join("libcartesi.a");
+            let libcartesi_jsonrpc_path = libpath.join("libcartesi_jsonrpc.a");
+            println!("cargo:rerun-if-changed={}", libcartesi_path.display());
+            println!("cargo:rerun-if-changed={}", libcartesi_jsonrpc_path.display());
         } else {
             build_cm::build(&machine_dir_path, &out_path);
             println!("cargo:rustc-link-search={}", out_path.to_str().unwrap());
@@ -110,12 +116,12 @@ fn main() {
 
     // Setup reruns
     println!("cargo:rerun-if-changed=build.rs");
-    println!(
-        "cargo:rerun-if-changed={}",
-        machine_dir_path.join(".git").display()
-    );
-    println!("cargo::rerun-if-env-changed=UARCH_PRISTINE_HASH_PATH");
-    println!("cargo::rerun-if-env-changed=UARCH_PRISTINE_RAM_PATH");
+    println!("cargo:rerun-if-changed={}", include_path.join("machine-c-api.h").display());
+    println!("cargo:rerun-if-env-changed=UARCH_PRISTINE_HASH_PATH");
+    println!("cargo:rerun-if-env-changed=UARCH_PRISTINE_RAM_PATH");
+    println!("cargo:rerun-if-env-changed=LIBCARTESI_PATH");
+    println!("cargo:rerun-if-env-changed=INCLUDECARTESI_PATH");
+    println!("cargo:rerun-if-env-changed=CARTESI_MACHINE_SOURCES");
 }
 
 #[cfg(not(feature = "external_cartesi"))]
@@ -136,6 +142,16 @@ mod build_cm {
             } else {
                 panic!("Internal error, no way specified to get uarch");
             }
+        }
+
+        // Monitor uarch files for changes
+        let uarch_hash_path = machine_dir_path.join("uarch").join("uarch-pristine-hash.c");
+        let uarch_ram_path = machine_dir_path.join("uarch").join("uarch-pristine-ram.c");
+        if uarch_hash_path.exists() {
+            println!("cargo:rerun-if-changed={}", uarch_hash_path.display());
+        }
+        if uarch_ram_path.exists() {
+            println!("cargo:rerun-if-changed={}", uarch_ram_path.display());
         }
 
         let libcartesi_path = machine_dir_path.join("src").join("libcartesi.a");
@@ -196,6 +212,10 @@ mod build_cm {
                 libcartesi_jsonrpc_path, libcartesi_jsonrpc_dest_path
             )
         });
+
+        // Monitor the library files for changes
+        println!("cargo:rerun-if-changed={}", libcartesi_path.display());
+        println!("cargo:rerun-if-changed={}", libcartesi_jsonrpc_path.display());
     }
 
     #[cfg(feature = "copy_uarch")]
