@@ -132,7 +132,7 @@ fn main() {
 
 #[cfg(not(feature = "external_cartesi"))]
 mod build_cm {
-    use std::{fs, path::Path, process::Command};
+    use std::{env, fs, path::Path, process::Command};
 
     pub fn build(machine_dir_path: &Path, out_path: &Path) {
         // Get uarch
@@ -176,14 +176,18 @@ mod build_cm {
             // Build and link emulator
             //
 
+            // Get number of parallel jobs from Cargo
+            let num_jobs = env::var("NUM_JOBS").unwrap_or_else(|_| "1".to_string());
+            let parallel_arg = format!("-j{}", num_jobs);
+
             // build dependencies
             Command::new("make")
-                .args(["submodules"])
+                .args([&parallel_arg, "submodules"])
                 .current_dir(machine_dir_path)
                 .status()
                 .expect("Failed to run setup `make submodules`");
             Command::new("make")
-                .args(["bundle-boost"])
+                .args([&parallel_arg, "bundle-boost"])
                 .current_dir(machine_dir_path)
                 .status()
                 .expect("Failed to run `make bundle-boost`");
@@ -191,6 +195,7 @@ mod build_cm {
             // build `libcartesi.a` and `libcartesi_jsonrpc.a`, release, no `libslirp`
             Command::new("make")
                 .args([
+                    &parallel_arg,
                     "-C",
                     "src",
                     "release=yes",
