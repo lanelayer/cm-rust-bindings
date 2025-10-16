@@ -1,51 +1,57 @@
 // (c) Cartesi and individual authors (see AUTHORS)
 // SPDX-License-Identifier: Apache-2.0 (see LICENSE)
 use std::{env, path::PathBuf, process::Command, fs};
-use tempfile::TempDir;
 
-fn get_machine_dir_path() -> (Option<TempDir>, PathBuf) {
+fn get_machine_dir_path() -> PathBuf {
     // 1. Check CARTESI_MACHINE_SOURCES
     if let Ok(env_path) = env::var("CARTESI_MACHINE_SOURCES") {
         let pb = PathBuf::from(&env_path);
         if pb.exists() {
-            return (None, pb.canonicalize().expect("cannot canonicalize CARTESI_MACHINE_SOURCES"));
+            return pb.canonicalize().expect("cannot canonicalize CARTESI_MACHINE_SOURCES");
         }
     }
     // 2. Check ../../emulator
     let default_path = PathBuf::from("../../emulator");
     if default_path.exists() {
-        return (None, default_path.canonicalize().expect("cannot canonicalize ../../emulator"));
+        return default_path.canonicalize().expect("cannot canonicalize ../../emulator");
     }
     // 3. Download and extract
     download_and_extract_emulator()
 }
 
-fn download_and_extract_emulator() -> (Option<TempDir>, PathBuf) {
+fn download_and_extract_emulator() -> PathBuf {
     use std::io::Cursor;
     use reqwest::blocking::get;
     use flate2::read::GzDecoder;
     use tar::Archive;
 
     let url = "https://github.com/cartesi/machine-emulator/archive/refs/tags/v0.19.0.tar.gz";
-    let tmp_dir = tempfile::tempdir().expect("failed to create tempdir");
-    let response = get(url).expect("failed to download emulator tarball");
-    let bytes = response.bytes().expect("failed to read tarball bytes");
-    let tar_gz = Cursor::new(bytes);
-    let tar = GzDecoder::new(tar_gz);
-    let mut archive = Archive::new(tar);
-    archive.unpack(tmp_dir.path()).expect("failed to unpack emulator tarball");
-    let extracted = tmp_dir.path().join("machine-emulator-0.19.0");
+    
+    // Use a stable directory in OUT_DIR instead of a temporary one
+    let out_dir = PathBuf::from(env::var("OUT_DIR").unwrap());
+    let cache_dir = out_dir.join("emulator_cache");
+    let extracted = cache_dir.join("machine-emulator-0.19.0");
+    
+    // Only download and extract if not already present
+    if !extracted.exists() {
+        fs::create_dir_all(&cache_dir).expect("failed to create cache dir");
+        let response = get(url).expect("failed to download emulator tarball");
+        let bytes = response.bytes().expect("failed to read tarball bytes");
+        let tar_gz = Cursor::new(bytes);
+        let tar = GzDecoder::new(tar_gz);
+        let mut archive = Archive::new(tar);
+        archive.unpack(&cache_dir).expect("failed to unpack emulator tarball");
+    }
+    
     assert!(extracted.exists(), "Extracted emulator dir not found");
-    (Some(tmp_dir), extracted.canonicalize().expect("cannot canonicalize extracted emulator dir"))
+    extracted.canonicalize().expect("cannot canonicalize extracted emulator dir")
 }
 
 fn main() {
     let out_path = PathBuf::from(env::var("OUT_DIR").unwrap());
 
     // Directory where `libcartesi.a` is located after it's built.
-    let (maybe_tmp_dir, machine_dir_path) = get_machine_dir_path();
-    // keep maybe_tmp_dir alive for the duration of main
-    let _tmp_dir_guard = maybe_tmp_dir;
+    let machine_dir_path = get_machine_dir_path();
 
     // Clean build artifacts and start from scratch
     // clean(&machine_dir_path);
