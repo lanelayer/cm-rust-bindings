@@ -166,12 +166,8 @@ mod build_cm {
         let libcartesi_jsonrpc_path = machine_dir_path.join("src").join("libcartesi_jsonrpc.a");
         let libcartesi_jsonrpc_dest_path = out_path.join("libcartesi_jsonrpc.a");
 
-        if libcartesi_path.exists() {
-            assert!(
-                libcartesi_jsonrpc_path.exists(),
-                "libcartesi.a exists, but libcartesi_jsonrpc.a does not"
-            );
-        } else {
+        // Only skip build if BOTH libraries already exist
+        if !libcartesi_path.exists() || !libcartesi_jsonrpc_path.exists() {
             //
             // Build and link emulator
             //
