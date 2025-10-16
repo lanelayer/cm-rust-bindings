@@ -267,9 +267,17 @@ mod build_cm {
 
         pub fn download(machine_dir_path: &Path) {
             let patch_file = machine_dir_path.join("add-generated-files.diff");
+            let patched_marker = machine_dir_path.join(".patched");
 
-            download_git_patch(&patch_file, VERSION_STRING);
-            apply_git_patch(&patch_file, machine_dir_path);
+            // Only download and apply patch if not already patched
+            if !patched_marker.exists() {
+                download_git_patch(&patch_file, VERSION_STRING);
+                apply_git_patch(&patch_file, machine_dir_path);
+                
+                // Create marker file to indicate patching is complete
+                fs::write(&patched_marker, VERSION_STRING)
+                    .expect("failed to create .patched marker file");
+            }
         }
 
         fn download_git_patch(patch_file: &Path, target_tag: &str) {
