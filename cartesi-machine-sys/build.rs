@@ -25,12 +25,12 @@ fn download_and_extract_emulator() -> PathBuf {
     use flate2::read::GzDecoder;
     use tar::Archive;
 
-    let url = "https://github.com/cartesi/machine-emulator/archive/refs/tags/v0.19.0.tar.gz";
-    
+    let url = "https://github.com/cartesi/machine-emulator/archive/refs/tags/v0.20.0.tar.gz";
+
     // Use a stable directory in OUT_DIR instead of a temporary one
     let out_dir = PathBuf::from(env::var("OUT_DIR").unwrap());
     let cache_dir = out_dir.join("emulator_cache");
-    let extracted = cache_dir.join("machine-emulator-0.19.0");
+    let extracted = cache_dir.join("machine-emulator-0.20.0");
     
     // Only download and extract if not already present
     if !extracted.exists() {
@@ -259,21 +259,33 @@ mod build_cm {
             process::{Command, Stdio},
         };
 
-        const VERSION_STRING: &str = "v0.19.0";
+        const VERSION_STRING: &str = "v0.20.0";
 
         pub fn download(machine_dir_path: &Path) {
             let patch_file = machine_dir_path.join("add-generated-files.diff");
             let patched_marker = machine_dir_path.join(".patched");
 
-            // Only download and apply patch if not already patched
-            if !patched_marker.exists() {
-                download_git_patch(&patch_file, VERSION_STRING);
-                apply_git_patch(&patch_file, machine_dir_path);
-                
-                // Create marker file to indicate patching is complete
-                fs::write(&patched_marker, VERSION_STRING)
-                    .expect("failed to create .patched marker file");
+            if patched_marker.exists() {
+                let previous = fs::read_to_string(&patched_marker).unwrap_or_default();
+                if previous.trim() == VERSION_STRING {
+                    return;
+                }
+                panic!(
+                    "{} exists but patches {:?} for `{}` while this build expects `{}`. \
+Remove `add-generated-files.diff` and `{}` after updating emulator sources.",
+                    patched_marker.display(),
+                    machine_dir_path,
+                    previous.trim(),
+                    VERSION_STRING,
+                    patched_marker.display(),
+                );
             }
+
+            download_git_patch(&patch_file, VERSION_STRING);
+            apply_git_patch(&patch_file, machine_dir_path);
+
+            fs::write(&patched_marker, VERSION_STRING)
+                .expect("failed to create .patched marker file");
         }
 
         fn download_git_patch(patch_file: &Path, target_tag: &str) {

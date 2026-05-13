@@ -32,7 +32,7 @@ link-cplusplus = "1.0"
 
 
 [build-dependencies]
-bindgen = "0.71"
+bindgen = "0.72"
 cfg-if = "1.0"
 
 hex-literal = "1.0"
