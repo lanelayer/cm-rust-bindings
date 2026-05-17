@@ -108,7 +108,11 @@ fn main() {
     }
     // WASM needs wasi-sdk's libc++ (Rust's wasm32-wasip1 target has none)
     #[cfg(feature = "wasm32")]
-    println!("cargo:rustc-link-lib=c++");
+    {
+        println!("cargo:rustc-link-lib=c++");
+        println!("cargo:rustc-link-lib=c++abi");
+        println!("cargo:rustc-link-lib=unwind");
+    }
 
     //
     //  Generate bindings
@@ -598,6 +602,24 @@ mod build_wasm32 {
             }
         }
 
+        // Compile operator new/delete stubs (wasi-sdk 33 doesn't provide them
+        // pre-built; clang generates them at link time but rust-lld doesn't)
+        let stubs_path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("patches")
+            .join("wasm-operator-stubs.cpp");
+        let stubs_obj = obj_dir.join("wasm-operator-stubs.o");
+        let status = Command::new(&cxx)
+            .args(cxxflags.split_whitespace())
+            .arg("-c")
+            .arg(&stubs_path)
+            .arg("-o")
+            .arg(&stubs_obj)
+            .status()
+            .expect("Failed to compile operator stubs");
+        if !status.success() {
+            panic!("Compilation failed for operator stubs");
+        }
+
         // Archive
         println!("cargo:warning=Archiving libcartesi.a...");
         let mut ar_cmd = Command::new(&ar);
@@ -613,19 +635,27 @@ mod build_wasm32 {
             panic!("Failed to create libcartesi.a");
         }
 
-        // Copy wasi-sdk libc++.a to OUT_DIR so the Rust linker can find it.
-        // Rust's wasm32-wasip1 target has no bundled libc++, and the C++
-        // code needs it (especially for exception handling).
-        let libcpp_src = wasi_sdk
-            .join("share/wasi-sysroot/lib/wasm32-wasip1/eh/libc++.a");
-        let libcpp_dst = out_path.join("libc++.a");
-        if libcpp_src.exists() {
-            fs::copy(&libcpp_src, &libcpp_dst)
-                .expect("Failed to copy wasi-sdk libc++.a");
-            println!("cargo:warning=Copied wasi-sdk libc++.a to OUT_DIR");
-        } else {
-            panic!("wasi-sdk libc++.a not found at {}", libcpp_src.display());
+        // Copy wasi-sdk libc++.a and libc++abi.a to OUT_DIR so the Rust
+        // linker can find them. Rust's wasm32-wasip1 target has no bundled
+        // libc++, and the C++ code needs it (especially for exception handling).
+        let libs: &[(&str, &str)] = &[
+            ("libc++.a", "libc++.a"),
+            ("libc++abi.a", "libc++abi.a"),
+            ("libunwind.a", "libunwind.a"),
+        ];
+        for (src_name, dst_name) in libs {
+            let src = wasi_sdk
+                .join("share/wasi-sysroot/lib/wasm32-wasip1/eh")
+                .join(src_name);
+            let dst = out_path.join(dst_name);
+            if src.exists() {
+                fs::copy(&src, &dst)
+                    .unwrap_or_else(|_| panic!("Failed to copy {}", src_name));
+            } else {
+                println!("cargo:warning=wasi-sdk {} not found, skipping", src_name);
+            }
         }
+        println!("cargo:warning=Copied wasi-sdk libc++ to OUT_DIR");
     }
 }
 
