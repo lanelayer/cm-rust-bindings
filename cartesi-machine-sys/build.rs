@@ -89,6 +89,9 @@ fn main() {
             let libcartesi_jsonrpc_path = libpath.join("libcartesi_jsonrpc.a");
             println!("cargo:rerun-if-changed={}", libcartesi_path.display());
             println!("cargo:rerun-if-changed={}", libcartesi_jsonrpc_path.display());
+        } else if #[cfg(feature = "wasm32")] {
+            build_wasm32::build(&machine_dir_path, &out_path);
+            println!("cargo:rustc-link-search={}", out_path.to_str().unwrap());
         } else {
             build_cm::build(&machine_dir_path, &out_path);
             println!("cargo:rustc-link-search={}", out_path.to_str().unwrap());
@@ -124,13 +127,24 @@ fn main() {
     };
 
     // generate machine api
-    let machine_bindings = bindgen::Builder::default()
+    let mut builder = bindgen::Builder::default()
         .header(include_path.join("machine-c-api.h").to_str().unwrap())
         .allowlist_item("^cm_.*")
         .allowlist_item("^CM_.*")
         .merge_extern_blocks(true)
         .prepend_enum_name(false)
-        .translate_enum_integer_types(true)
+        .translate_enum_integer_types(true);
+
+    // When building for wasm32, use wasi-sdk sysroot for bindgen
+    #[cfg(feature = "wasm32")]
+    {
+        let wasi_sdk = build_wasm32::find_wasi_sdk();
+        let sysroot = wasi_sdk.join("share/wasi-sysroot");
+        builder = builder.clang_arg(format!("--sysroot={}", sysroot.display()));
+        builder = builder.clang_arg("--target=wasm32-wasi");
+    }
+
+    let machine_bindings = builder
         .generate()
         .expect("Unable to generate machine bindings");
 
@@ -153,6 +167,7 @@ fn main() {
 mod build_cm {
     use std::{env, fs, path::Path, process::Command};
 
+    #[cfg(not(feature = "wasm32"))]
     pub fn build(machine_dir_path: &Path, out_path: &Path) {
         // Get uarch
         cfg_if::cfg_if! {
@@ -268,8 +283,8 @@ mod build_cm {
         }
     }
 
-    #[cfg(feature = "download_uarch")]
-    mod download_uarch {
+    #[cfg(any(feature = "download_uarch", feature = "wasm32"))]
+    pub(crate) mod download_uarch {
         use bytes::Bytes;
         use std::{
             fs::{self, OpenOptions},
@@ -371,6 +386,232 @@ Remove `add-generated-files.diff` and `{}` after updating emulator sources.",
     }
 }
 
+#[cfg(feature = "wasm32")]
+mod build_wasm32 {
+    use std::{
+        env, fs,
+        path::{Path, PathBuf},
+        process::Command,
+    };
+
+    pub fn build(machine_dir_path: &Path, out_path: &Path) {
+        // 1. Apply generated-files diff (same as download_uarch)
+        super::build_cm::download_uarch::download(machine_dir_path);
+
+        // 2. Apply our WASI compatibility patch
+        apply_wasi_patch(machine_dir_path);
+
+        // 3. Generate interpret-jump-table.h
+        generate_jump_table(machine_dir_path);
+
+        // 4. Download boost if needed
+        ensure_deps(machine_dir_path);
+
+        // 5. Compile with wasi-sdk
+        let wasi_sdk = find_wasi_sdk();
+        compile_libcartesi(&wasi_sdk, machine_dir_path, out_path);
+    }
+
+    pub fn find_wasi_sdk() -> PathBuf {
+        if let Ok(p) = env::var("WASI_SDK_PATH") {
+            let pb = PathBuf::from(&p);
+            if pb.join("bin/clang++").exists() {
+                return pb;
+            }
+        }
+        for candidate in &["/opt/wasi-sdk"] {
+            let pb = PathBuf::from(candidate);
+            if pb.join("bin/clang++").exists() {
+                return pb;
+            }
+        }
+        // Search /tmp for extracted wasi-sdk
+        if let Ok(entries) = fs::read_dir("/tmp") {
+            for entry in entries.flatten() {
+                let name = entry.file_name();
+                if name.to_string_lossy().starts_with("wasi-sdk-")
+                    && entry.path().join("bin/clang++").exists()
+                {
+                    return entry.path();
+                }
+            }
+        }
+        panic!(
+            "wasi-sdk not found. Set WASI_SDK_PATH or install wasi-sdk to /opt/wasi-sdk.\n\
+             Download: https://github.com/WebAssembly/wasi-sdk/releases"
+        );
+    }
+
+    fn apply_wasi_patch(emu_dir: &Path) {
+        // WASI compat patch is bundled alongside this build script
+        let patch_path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("patches")
+            .join("wasi-compat.diff");
+
+        if !patch_path.exists() {
+            panic!("WASI patch not found at {}", patch_path.display());
+        }
+
+        println!("cargo:warning=Applying WASI compat patch...");
+        let status = Command::new("patch")
+            .arg("-Np1")
+            .arg("-i")
+            .arg(&patch_path)
+            .current_dir(emu_dir)
+            .status()
+            .expect("Failed to run patch for WASI compat");
+
+        if !status.success() {
+            // -Np1 returns 1 if already applied (harmless)
+            eprintln!("cargo:warning=WASI patch may already be applied (non-zero exit)");
+        }
+    }
+
+    fn generate_jump_table(emu_dir: &Path) {
+        let out = emu_dir.join("src/interpret-jump-table.h");
+        if out.exists() {
+            return;
+        }
+        let script = emu_dir.join("tools/gen-interpret-jump-table.lua");
+        if !script.exists() {
+            panic!("interpret-jump-table.h generator not found");
+        }
+        println!("cargo:warning=Generating interpret-jump-table.h...");
+        let output = Command::new("lua5.4")
+            .arg(&script)
+            .output()
+            .expect("lua5.4 not found — install lua5.4 to generate interpret-jump-table.h");
+        fs::write(&out, &output.stdout).expect("failed to write interpret-jump-table.h");
+    }
+
+    fn ensure_deps(emu_dir: &Path) {
+        let downloads = emu_dir.join("third-party/downloads");
+        let boost = downloads.join("boost");
+        if !boost.exists() {
+            println!("cargo:warning=Downloading boost headers...");
+            let status = Command::new("make")
+                .arg("bundle-boost")
+                .current_dir(emu_dir)
+                .status()
+                .expect("Failed to run make bundle-boost");
+            if !status.success() {
+                panic!("make bundle-boost failed");
+            }
+        }
+    }
+
+    fn compile_libcartesi(wasi_sdk: &Path, emu_dir: &Path, out_path: &Path) {
+        let libcartesi = out_path.join("libcartesi.a");
+        if libcartesi.exists() {
+            println!("cargo:warning=libcartesi.a already built, skipping compilation");
+            return;
+        }
+
+        let sysroot = wasi_sdk.join("share/wasi-sysroot");
+        let third_party = emu_dir.join("third-party");
+        let src = emu_dir.join("src");
+        let obj_dir = out_path.join("wasm-obj");
+        fs::create_dir_all(&obj_dir).unwrap();
+
+        let cxx = wasi_sdk.join("bin/clang++");
+        let cc = wasi_sdk.join("bin/clang");
+        let ar = wasi_sdk.join("bin/llvm-ar");
+
+        let cxxflags = format!(
+            "--target=wasm32-wasi --sysroot={sysroot} \
+             -std=gnu++23 -O2 -g0 -fwasm-exceptions \
+             -DNO_TTY -DNO_THREADS -DNO_MMAP -DNO_SLIRP -DNO_SELECT \
+             -DNO_POSIX_FS -DNO_SIGACTION -DNO_FORK -DNO_FLOCK \
+             -DNO_FICLONE -DNO_TUNTAP -DNO_USLEEP -DNO_MKDIR \
+             -DJSON_HAS_FILESYSTEM=0 -D_FILE_OFFSET_BITS=64 \
+             -DBOOST_ASIO_DISABLE_ERROR_LOCATION -DNDEBUG \
+             -I{src} -I{third_party}/ankerl \
+             -I{third_party}/llvm-flang-uint128 -I{third_party}/nlohmann-json \
+             -I{third_party}/downloads",
+            sysroot = sysroot.display(),
+            src = src.display(),
+            third_party = third_party.display(),
+        );
+
+        let cflags = format!(
+            "--target=wasm32-wasi --sysroot={sysroot} -O2 -g0 -DNDEBUG -I{src}",
+            sysroot = sysroot.display(),
+            src = src.display(),
+        );
+
+        // C++ objects (no jsonrpc-machine, no clua, no remote)
+        let cpp_files: &[&str] = &[
+            "base64", "clint-address-range", "dtb", "hash-tree", "htif-address-range",
+            "interpret", "json-util", "machine-c-api", "machine-config", "machine",
+            "machine-address-ranges", "machine-console", "memory-address-range",
+            "os", "os-mapped-memory", "os-filesystem", "plic-address-range",
+            "back-merkle-tree", "send-cmio-response", "keccak-256-hasher",
+            "sha-256-hasher", "is-pristine", "uarch-pristine-state-hash",
+            "uarch-reset-state", "uarch-step", "local-machine", "uarch-interpret",
+            "virtio-address-range", "virtio-console-address-range",
+            "virtio-p9fs-address-range", "virtio-net-address-range",
+            "virtio-net-tuntap-address-range", "virtio-net-user-address-range",
+        ];
+
+        println!("cargo:warning=Compiling {} C++ files with wasi-sdk...", cpp_files.len());
+
+        for name in cpp_files {
+            let src_file = src.join(format!("{}.cpp", name));
+            let obj = obj_dir.join(format!("{}.o", name));
+            let status = Command::new(&cxx)
+                .args(cxxflags.split_whitespace())
+                .arg("-c")
+                .arg(&src_file)
+                .arg("-o")
+                .arg(&obj)
+                .status()
+                .unwrap_or_else(|_| panic!("Failed to spawn clang++ for {}", name));
+            if !status.success() {
+                panic!("Compilation failed for {}.cpp", name);
+            }
+        }
+
+        // C objects (uarch generated files)
+        let c_pairs: &[(&str, &str)] = &[
+            ("uarch/uarch-pristine-hash.c", "uarch-pristine-hash"),
+            ("uarch/uarch-pristine-ram.c", "uarch-pristine-ram"),
+        ];
+        for (rel_path, obj_name) in c_pairs {
+            let src_file = emu_dir.join(rel_path);
+            if !src_file.exists() {
+                panic!("Missing uarch file: {}", src_file.display());
+            }
+            let obj = obj_dir.join(format!("{}.o", obj_name));
+            let status = Command::new(&cc)
+                .args(cflags.split_whitespace())
+                .arg("-c")
+                .arg(&src_file)
+                .arg("-o")
+                .arg(&obj)
+                .status()
+                .expect("Failed to spawn clang");
+            if !status.success() {
+                panic!("Compilation failed for {}", rel_path);
+            }
+        }
+
+        // Archive
+        println!("cargo:warning=Archiving libcartesi.a...");
+        let mut ar_cmd = Command::new(&ar);
+        ar_cmd.arg("rcs").arg(&libcartesi);
+        for entry in fs::read_dir(&obj_dir).unwrap() {
+            let entry = entry.unwrap();
+            if entry.path().extension().map_or(false, |e| e == "o") {
+                ar_cmd.arg(entry.path());
+            }
+        }
+        let status = ar_cmd.status().expect("Failed to run llvm-ar");
+        if !status.success() {
+            panic!("Failed to create libcartesi.a");
+        }
+    }
+}
+
 mod feature_checks {
     #[cfg(all(feature = "build_uarch", feature = "copy_uarch",))]
     compile_error!("Features `build_uarch` and `copy_uarch` are mutually exclusive");
@@ -381,14 +622,23 @@ mod feature_checks {
     #[cfg(all(feature = "copy_uarch", feature = "download_uarch"))]
     compile_error!("Features `copy_uarch`, and `download_uarch` are mutually exclusive");
 
+    #[cfg(any(
+        all(feature = "wasm32", feature = "download_uarch"),
+        all(feature = "wasm32", feature = "build_uarch"),
+        all(feature = "wasm32", feature = "copy_uarch"),
+        all(feature = "wasm32", feature = "external_cartesi"),
+    ))]
+    compile_error!("Feature `wasm32` is mutually exclusive with `download_uarch`, `build_uarch`, `copy_uarch`, and `external_cartesi`");
+
     #[cfg(not(any(
         feature = "copy_uarch",
         feature = "download_uarch",
         feature = "build_uarch",
         feature = "external_cartesi",
+        feature = "wasm32",
     )))]
     compile_error!(
-        "At least one of `build_uarch`, `copy_uarch`, `download_uarch`, and `external_cartesi` must be set"
+        "At least one of `build_uarch`, `copy_uarch`, `download_uarch`, `wasm32`, and `external_cartesi` must be set"
     );
 }
 

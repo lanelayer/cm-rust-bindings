@@ -17,6 +17,9 @@ remote_machine = []
 # Downloads from emulator's GitHub release
 download_uarch = ["reqwest", "bytes"]
 
+# Downloads tarball, applies WASI compat patches, compiles with wasi-sdk
+wasm32 = ["reqwest", "bytes"]
+
 # requires docker daemon to be running
 build_uarch = []
 

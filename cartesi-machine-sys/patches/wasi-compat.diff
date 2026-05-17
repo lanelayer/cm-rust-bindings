@@ -1,0 +1,40 @@
+diff --git a/src/os-posix-compat.h b/src/os-posix-compat.h
+index 5f6640dc..8112be04 100644
+--- a/src/os-posix-compat.h
++++ b/src/os-posix-compat.h
+@@ -189,6 +189,19 @@
+ 
+ #endif // _WIN32
+ 
++#ifdef __wasi__
++// WASI's <unistd.h> does not expose dup() without __wasilibc_unmodified_upstream
++// because WASI has no native dup syscall. For the Cartesi Machine emulator, dup
++// is only needed by the console/TTY code path (which is disabled via NO_TTY on
++// WASM builds). We provide a minimal stub.
++#include <unistd.h>
++[[maybe_unused]] static int dup(int fd) {
++    // On WASI we don't support true fd duplication; return the fd as-is.
++    // Callers are guarded by HAVE_TTY checks at runtime.
++    return fd;
++}
++#endif
++
+ #include <fcntl.h> // IWYU pragma: keep
+ 
+ #ifndef O_BINARY
+diff --git a/src/os.cpp b/src/os.cpp
+index 37fb11fb..4d4ddaeb 100644
+--- a/src/os.cpp
++++ b/src/os.cpp
+@@ -66,8 +66,9 @@
+ 
+ #else // not _WIN32
+ 
+-#if defined(HAVE_TTY) || defined(HAVE_TERMIOS) || defined(HAVE_USLEEP)
+-#include <unistd.h> // write/read/close/usleep/fork
++#include <unistd.h> // write/read/close/usleep/fork (available on WASI too)
++#if !defined(HAVE_TTY) && !defined(HAVE_TERMIOS) && !defined(HAVE_USLEEP) && defined(__wasi__)
++// WASI libc provides dup/close/read/write but not fork
+ #endif
+ 
+ #if defined(HAVE_SELECT)
