@@ -141,7 +141,7 @@ fn main() {
         let wasi_sdk = build_wasm32::find_wasi_sdk();
         let sysroot = wasi_sdk.join("share/wasi-sysroot");
         builder = builder.clang_arg(format!("--sysroot={}", sysroot.display()));
-        builder = builder.clang_arg("--target=wasm32-wasi");
+        builder = builder.clang_arg("--target=wasm32-wasip1");
     }
 
     let machine_bindings = builder
@@ -518,7 +518,7 @@ mod build_wasm32 {
         let ar = wasi_sdk.join("bin/llvm-ar");
 
         let cxxflags = format!(
-            "--target=wasm32-wasi --sysroot={sysroot} \
+            "--target=wasm32-wasip1 --sysroot={sysroot} \
              -std=gnu++23 -O2 -g0 -fwasm-exceptions \
              -DNO_TTY -DNO_THREADS -DNO_MMAP -DNO_SLIRP -DNO_SELECT \
              -DNO_POSIX_FS -DNO_SIGACTION -DNO_FORK -DNO_FLOCK \
@@ -534,7 +534,7 @@ mod build_wasm32 {
         );
 
         let cflags = format!(
-            "--target=wasm32-wasi --sysroot={sysroot} -O2 -g0 -DNDEBUG -I{src}",
+            "--target=wasm32-wasip1 --sysroot={sysroot} -O2 -g0 -DNDEBUG -I{src}",
             sysroot = sysroot.display(),
             src = src.display(),
         );
