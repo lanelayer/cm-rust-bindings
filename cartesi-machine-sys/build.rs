@@ -520,6 +520,7 @@ mod build_wasm32 {
         let cxxflags = format!(
             "--target=wasm32-wasip1 --sysroot={sysroot} \
              -std=gnu++23 -O2 -g0 -fwasm-exceptions \
+             -mllvm -wasm-use-legacy-eh=false \
              -DNO_TTY -DNO_THREADS -DNO_MMAP -DNO_SLIRP -DNO_SELECT \
              -DNO_POSIX_FS -DNO_SIGACTION -DNO_FORK -DNO_FLOCK \
              -DNO_FICLONE -DNO_TUNTAP -DNO_USLEEP -DNO_MKDIR \
