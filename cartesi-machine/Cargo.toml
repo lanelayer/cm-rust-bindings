@@ -27,6 +27,9 @@ copy_uarch = ["cartesi-machine-sys/copy_uarch"]
 # requires setting env vars LIBCARTESI_PATH and INCLUDECARTESI_PATH
 external_cartesi = ["cartesi-machine-sys/external_cartesi"]
 
+# builds machine-emulator for wasm32-wasi using wasi-sdk
+wasm32 = ["cartesi-machine-sys/wasm32"]
+
 
 [dependencies]
 cartesi-machine-sys = { path = "../cartesi-machine-sys" }
