@@ -99,7 +99,6 @@ fn main() {
     }
 
     // static link
-    // println!("cargo:rustc-link-lib=slirp");
     cfg_if::cfg_if! {
         if #[cfg(feature = "remote_machine")] {
             println!("cargo:rustc-link-lib=static=cartesi_jsonrpc");
@@ -107,6 +106,9 @@ fn main() {
             println!("cargo:rustc-link-lib=static=cartesi");
         }
     }
+    // WASM needs wasi-sdk's libc++ (Rust's wasm32-wasip1 target has none)
+    #[cfg(feature = "wasm32")]
+    println!("cargo:rustc-link-lib=c++");
 
     //
     //  Generate bindings
@@ -609,6 +611,20 @@ mod build_wasm32 {
         let status = ar_cmd.status().expect("Failed to run llvm-ar");
         if !status.success() {
             panic!("Failed to create libcartesi.a");
+        }
+
+        // Copy wasi-sdk libc++.a to OUT_DIR so the Rust linker can find it.
+        // Rust's wasm32-wasip1 target has no bundled libc++, and the C++
+        // code needs it (especially for exception handling).
+        let libcpp_src = wasi_sdk
+            .join("share/wasi-sysroot/lib/wasm32-wasip1/eh/libc++.a");
+        let libcpp_dst = out_path.join("libc++.a");
+        if libcpp_src.exists() {
+            fs::copy(&libcpp_src, &libcpp_dst)
+                .expect("Failed to copy wasi-sdk libc++.a");
+            println!("cargo:warning=Copied wasi-sdk libc++.a to OUT_DIR");
+        } else {
+            panic!("wasi-sdk libc++.a not found at {}", libcpp_src.display());
         }
     }
 }
