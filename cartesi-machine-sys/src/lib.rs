@@ -3,6 +3,7 @@
 #![allow(non_camel_case_types)]
 #![allow(non_snake_case)]
 
+#[cfg(not(target_arch = "wasm32"))]
 extern crate link_cplusplus;
 include!(concat!(env!("OUT_DIR"), "/bindings.rs"));
 // include!(concat!(env!("OUT_DIR"), "/htif.rs"));

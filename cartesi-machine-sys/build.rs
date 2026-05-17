@@ -15,10 +15,29 @@ fn get_machine_dir_path() -> PathBuf {
     if default_path.exists() {
         return default_path.canonicalize().expect("cannot canonicalize ../../emulator");
     }
-    // 3. Download and extract
+    // 3. For external_cartesi, use the env var location as fallback
+    #[cfg(feature = "external_cartesi")]
+    {
+        if let Ok(env_path) = env::var("INCLUDECARTESI_PATH") {
+            let pb = PathBuf::from(&env_path);
+            if pb.exists() {
+                return pb.canonicalize().expect("cannot canonicalize INCLUDECARTESI_PATH");
+            }
+        }
+        // If all else fails with external_cartesi, use the CARTESI_MACHINE_SOURCES or a default
+        // The CARTESI_MACHINE_SOURCES was already checked above, so fallback:
+        let fallback = PathBuf::from("../../machine-emulator/src");
+        if fallback.exists() {
+            return fallback.canonicalize().expect("cannot canonicalize fallback");
+        }
+        panic!("external_cartesi set but no machine-emulator source found. Set CARTESI_MACHINE_SOURCES or INCLUDECARTESI_PATH.");
+    }
+    #[cfg(not(feature = "external_cartesi"))]
+    // 4. Download and extract
     download_and_extract_emulator()
 }
 
+#[cfg(not(feature = "external_cartesi"))]
 fn download_and_extract_emulator() -> PathBuf {
     use std::io::Cursor;
     use reqwest::blocking::get;
